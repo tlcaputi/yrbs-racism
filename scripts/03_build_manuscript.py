@@ -28,6 +28,7 @@ prev_df   = pd.read_csv(os.path.join(DATA, "prevalences.csv"))
 rr_df     = pd.read_csv(os.path.join(DATA, "risk_ratios.csv"))
 race_rr   = pd.read_csv(os.path.join(DATA, "race_stratified_rr.csv"))
 strat_rr  = pd.read_csv(os.path.join(DATA, "stratified_rr.csv"))
+coll_rr   = pd.read_csv(os.path.join(DATA, "collapsed_rr.csv"))
 racism_p  = pd.read_csv(os.path.join(DATA, "racism_prevalence.csv"))
 
 # Outcome order and metadata
@@ -171,42 +172,38 @@ race_pcts = {}
 for _, row in racism_p.iterrows():
     race_pcts[row['group']] = row['any_pct']
 
-# Bullied at school RRs (for 3-group text: Rarely/Sometimes range, Most/Always range)
-bul_rr_rarely, bul_rr_rarely_lo, bul_rr_rarely_hi = get_rr("Bullied at school", "Rarely")
-bul_rr_sometimes, bul_rr_sometimes_lo, bul_rr_sometimes_hi = get_rr("Bullied at school", "Sometimes")
-bul_rr_most, bul_rr_most_lo, bul_rr_most_hi = get_rr("Bullied at school", "Most")
-bul_rr_alw, bul_rr_alw_lo, bul_rr_alw_hi = get_rr("Bullied at school", "Always")
+# Bullied at school collapsed RRs from proper 3-level regression
+def _get_collapsed(grp, outcome, level):
+    """Get RR, lo, hi from collapsed_rr.csv."""
+    row = coll_rr[(coll_rr['group'] == grp) & (coll_rr['outcome'] == outcome) &
+                  (coll_rr['racism_level'] == level)]
+    if len(row) and not pd.isna(row.iloc[0]['rr']):
+        r = row.iloc[0]
+        return r['rr'], r['rr_lo'], r['rr_hi']
+    return np.nan, np.nan, np.nan
 
-# CI ranges for collapsed groups
-bul_rs_ci_lo = min(bul_rr_rarely_lo, bul_rr_sometimes_lo)
-bul_rs_ci_hi = max(bul_rr_rarely_hi, bul_rr_sometimes_hi)
-bul_ma_ci_lo = min(bul_rr_most_lo, bul_rr_alw_lo)
-bul_ma_ci_hi = max(bul_rr_most_hi, bul_rr_alw_hi)
+bul_rs_rr, bul_rs_lo, bul_rs_hi = _get_collapsed("All", "Bullied at school", "Rarely/Sometimes")
+bul_ma_rr, bul_ma_lo, bul_ma_hi = _get_collapsed("All", "Bullied at school", "Most/Always")
 
-# Race-stratified text (Asian, Black) — LaTeX version for manuscript
+# Race-stratified text (Asian, Black) — collapsed groups from proper 3-level regression
 race_parts = []
-for race in ['Asian', 'Black']:
-    sub = race_rr[race_rr['race'] == race]
-    parts_inner = []
-    for _, row in sub.iterrows():
-        parts_inner.append(
-            f'``{row["racism_level"]}\'\' RR {row["rr"]:.2f}, '
-            f'95\\% CI {row["rr_lo"]:.2f}--{row["rr_hi"]:.2f}')
-    if parts_inner:
-        race_parts.append(f'{race} children ({"; ".join(parts_inner)})')
-race_text = ' and '.join(race_parts)
-
-# Plain-text version for word count
 race_parts_plain = []
 for race in ['Asian', 'Black']:
-    sub = race_rr[race_rr['race'] == race]
-    parts_inner = []
-    for _, row in sub.iterrows():
-        parts_inner.append(
-            f'\u201c{row["racism_level"]}\u201d RR {row["rr"]:.2f}, '
-            f'95% CI {row["rr_lo"]:.2f}\u2013{row["rr_hi"]:.2f}')
-    if parts_inner:
-        race_parts_plain.append(f'{race} children ({"; ".join(parts_inner)})')
+    rs_rr, rs_lo, rs_hi = _get_collapsed(race, "Bullied at school", "Rarely/Sometimes")
+    ma_rr, ma_lo, ma_hi = _get_collapsed(race, "Bullied at school", "Most/Always")
+    # LaTeX version
+    race_parts.append(
+        f'{race} children (rarely or sometimes RR {rs_rr:.2f}, '
+        f'95\\% CI {rs_lo:.2f}--{rs_hi:.2f}; '
+        f'most of the time or always RR {ma_rr:.2f}, '
+        f'95\\% CI {ma_lo:.2f}--{ma_hi:.2f})')
+    # Plain-text version for word count
+    race_parts_plain.append(
+        f'{race} children (rarely or sometimes RR {rs_rr:.2f}, '
+        f'95% CI {rs_lo:.2f}\u2013{rs_hi:.2f}; '
+        f'most of the time or always RR {ma_rr:.2f}, '
+        f'95% CI {ma_lo:.2f}\u2013{ma_hi:.2f})')
+race_text = ' and '.join(race_parts)
 race_text_plain = ' and '.join(race_parts_plain)
 
 
@@ -241,6 +238,13 @@ def make_panel_tabular(panel_df):
                      + ' & '.join(prev_cells) + r' \\')
     return '\n'.join(rows)
 
+# Compute Ns per racism level for table headers
+racism_level_ns = {}
+nw_racism_level_ns = {}
+for lev_val, lev_name in [(1, 'Never'), (2, 'Rarely'), (3, 'Sometimes'), (4, 'Most'), (5, 'Always')]:
+    racism_level_ns[lev_name] = int(raw[raw['Q23'] == lev_val].shape[0])
+    nw_racism_level_ns[lev_name] = int(nw[nw['Q23'] == lev_val].shape[0])
+
 panel_a = make_panel_tabular(prev_df)
 panel_b = make_panel_tabular(nw_prev_df)
 
@@ -259,6 +263,7 @@ table_tex = rf"""\begin{{landscape}}
  & & \multicolumn{{5}}{{c}}{{Weighted Prevalence, \% (95\% CI)}} \\
 \cmidrule(lr){{3-7}}
 Outcome & $N$ & Never & Rarely & Sometimes & Most of the time & Always \\
+ & & ($n = {racism_level_ns['Never']:,}$) & ($n = {racism_level_ns['Rarely']:,}$) & ($n = {racism_level_ns['Sometimes']:,}$) & ($n = {racism_level_ns['Most']:,}$) & ($n = {racism_level_ns['Always']:,}$) \\
 \midrule
 {panel_a}
 \bottomrule
@@ -274,6 +279,7 @@ Outcome & $N$ & Never & Rarely & Sometimes & Most of the time & Always \\
  & & \multicolumn{{5}}{{c}}{{Weighted Prevalence, \% (95\% CI)}} \\
 \cmidrule(lr){{3-7}}
 Outcome & $N$ & Never & Rarely & Sometimes & Most of the time & Always \\
+ & & ($n = {nw_racism_level_ns['Never']:,}$) & ($n = {nw_racism_level_ns['Rarely']:,}$) & ($n = {nw_racism_level_ns['Sometimes']:,}$) & ($n = {nw_racism_level_ns['Most']:,}$) & ($n = {nw_racism_level_ns['Always']:,}$) \\
 \midrule
 {panel_b}
 \bottomrule
@@ -352,10 +358,11 @@ print("  Saved efigure1")
 
 # ── Build supplement eTable (as plain string to avoid rf-string escaping) ──
 supplement_tex = r"""
+\begin{landscape}
 \singlespacing
 \small
 \renewcommand{\arraystretch}{1.2}
-\begin{longtable}{>{\raggedright\arraybackslash}p{1.6in} >{\raggedright\arraybackslash}p{2.6in} >{\raggedright\arraybackslash}p{2.0in}}
+\begin{longtable}{>{\raggedright\arraybackslash}p{2.2in} >{\raggedright\arraybackslash}p{4.0in} >{\raggedright\arraybackslash}p{2.8in}}
 \toprule
 \textbf{Variable} & \textbf{Survey Question} & \textbf{Response Options / Coding} \\
 \midrule
@@ -481,6 +488,7 @@ Coded as binary (1 if Very well or Well). \\
 \end{longtable}
 \doublespacing
 \normalsize
+\end{landscape}
 """
 
 # ── Generate eTable 2 (race-stratified ARRs) ─────────────────
@@ -517,7 +525,11 @@ def make_rr_panel_rows(rr_data):
             row = sub[sub['racism_level'] == lev]
             if len(row) and not pd.isna(row.iloc[0]['rr']):
                 r = row.iloc[0]
-                cells.append(f'{r["rr"]:.2f} ({r["rr_lo"]:.2f}--{r["rr_hi"]:.2f})')
+                # Suppress extreme estimates from tiny samples
+                if r['rr'] > 50 or r['rr_hi'] > 100:
+                    cells.append('---')
+                else:
+                    cells.append(f'{r["rr"]:.2f} ({r["rr_lo"]:.2f}--{r["rr_hi"]:.2f})')
             else:
                 cells.append('---')
 
@@ -612,10 +624,10 @@ _body_parts = [
     f"the time or always. "
     f"These patterns persist after accounting for potential confounders. After controlling for "
     f"sex, age, race/ethnicity, English language proficiency, and grades, those who experience "
-    f"racism rarely or sometimes (RR {bul_rr_rarely:.2f}\u2013{bul_rr_sometimes:.2f}, 95% CI "
-    f"{bul_rs_ci_lo:.2f}\u2013{bul_rs_ci_hi:.2f}) and those who experience racism most of the time "
-    f"or always (RR {bul_rr_most:.2f}\u2013{bul_rr_alw:.2f}, 95% CI "
-    f"{bul_ma_ci_lo:.2f}\u2013{bul_ma_ci_hi:.2f}) are significantly more likely to be bullied at "
+    f"racism rarely or sometimes (RR {bul_rs_rr:.2f}, 95% CI "
+    f"{bul_rs_lo:.2f}\u2013{bul_rs_hi:.2f}) and those who experience racism most of the time "
+    f"or always (RR {bul_ma_rr:.2f}, 95% CI "
+    f"{bul_ma_lo:.2f}\u2013{bul_ma_hi:.2f}) are significantly more likely to be bullied at "
     f"school compared with those who never experience racism. The response is strongest for "
     f"{race_text_plain}.",
     # Discussion
@@ -759,10 +771,10 @@ the time or always.
 
 These patterns persist after accounting for potential confounders. After controlling for
 sex, age, race/ethnicity, English language proficiency, and grades, those who experience
-racism rarely or sometimes (RR {bul_rr_rarely:.2f}--{bul_rr_sometimes:.2f}, 95\% CI
-{bul_rs_ci_lo:.2f}--{bul_rs_ci_hi:.2f}) and those who experience racism most of the time
-or always (RR {bul_rr_most:.2f}--{bul_rr_alw:.2f}, 95\% CI
-{bul_ma_ci_lo:.2f}--{bul_ma_ci_hi:.2f}) are significantly more likely to be bullied at
+racism rarely or sometimes (RR {bul_rs_rr:.2f}, 95\% CI
+{bul_rs_lo:.2f}--{bul_rs_hi:.2f}) and those who experience racism most of the time
+or always (RR {bul_ma_rr:.2f}, 95\% CI
+{bul_ma_lo:.2f}--{bul_ma_hi:.2f}) are significantly more likely to be bullied at
 school compared with those who never experience racism. The response is strongest for
 {race_text}.
 

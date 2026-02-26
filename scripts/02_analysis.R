@@ -250,11 +250,108 @@ race_df <- data.frame(race = race_df$group, outcome = race_df$outcome,
                       n = race_df$n, stringsAsFactors = FALSE)
 rownames(race_df) <- NULL
 
+# ── 4b. Collapsed-group analysis (3-level racism) ──────────────
+cat("Running collapsed-group analyses (Never vs Rarely/Sometimes vs Most/Always)...\n")
+
+df$racism_3 <- factor(
+  ifelse(df$racism_f == "Never", "Never",
+  ifelse(df$racism_f %in% c("Rarely", "Sometimes"), "Rarely/Sometimes",
+  ifelse(df$racism_f %in% c("Most", "Always"), "Most/Always", NA))),
+  levels = c("Never", "Rarely/Sometimes", "Most/Always")
+)
+
+collapsed_rows <- list()
+for (grp in c("All", "Non-White", "White", "Black", "Hispanic", "Asian",
+              "AI/AN", "NH/PI", "Multiple")) {
+  if (grp == "All") {
+    sub_grp <- df
+    covs <- covariates_str  # includes race_f
+  } else if (grp == "Non-White") {
+    sub_grp <- df[!is.na(df$race_cat) & df$race_cat != "White", ]
+    covs <- paste0(race_covs_str, " + race_f")
+  } else {
+    sub_grp <- df[!is.na(df$race_cat) & df$race_cat == grp, ]
+    covs <- race_covs_str
+  }
+
+  for (od in outcome_defs) {
+    outcome_col <- paste0(od$qn, "_bin")
+    fml <- as.formula(paste(outcome_col, "~ racism_3 +", covs))
+
+    base_vars <- c(outcome_col, "racism_3", "weight", "female", "age_cat",
+                   "english_prof", "good_grades")
+    if (grp %in% c("All", "Non-White")) base_vars <- c(base_vars, "race_f")
+
+    sub2 <- sub_grp[complete.cases(sub_grp[, base_vars]), ]
+    sub2 <- sub2[sub2$weight > 0, ]
+    if (grp == "Non-White") sub2$race_f <- droplevels(sub2$race_f)
+
+    if (nrow(sub2) < 50 || sum(sub2[[outcome_col]], na.rm = TRUE) < 5) {
+      cat(sprintf("  SKIP %s / %s (collapsed, n=%d)\n", grp, od$label, nrow(sub2)))
+      for (lev in c("Rarely/Sometimes", "Most/Always")) {
+        collapsed_rows[[length(collapsed_rows) + 1]] <- data.frame(
+          group = grp, outcome = od$label, outcome_var = outcome_col,
+          racism_level = lev, rr = NA, rr_lo = NA, rr_hi = NA, n = nrow(sub2),
+          stringsAsFactors = FALSE
+        )
+      }
+      next
+    }
+
+    z <- tryCatch(
+      zelig2(fml, model = "logit", data = sub2, weights = sub2$weight, num = NUM_SIMS),
+      error = function(e) {
+        cat(sprintf("  ERROR %s / %s (collapsed): %s\n", grp, od$label, e$message)); NULL
+      }
+    )
+    if (is.null(z)) {
+      for (lev in c("Rarely/Sometimes", "Most/Always")) {
+        collapsed_rows[[length(collapsed_rows) + 1]] <- data.frame(
+          group = grp, outcome = od$label, outcome_var = outcome_col,
+          racism_level = lev, rr = NA, rr_lo = NA, rr_hi = NA, n = nrow(sub2),
+          stringsAsFactors = FALSE
+        )
+      }
+      next
+    }
+
+    for (lev in c("Rarely/Sometimes", "Most/Always")) {
+      sim_res <- tryCatch({
+        z2 <- setx(z, racism_3 = "Never", fn = "mean")
+        z2 <- setx1(z2, racism_3 = lev, fn = "mean")
+        z2 <- sim(z2)
+        qi <- zelig2_qi_to_df(z2)
+        rr_draws <- qi$rr[is.finite(qi$rr)]
+        if (length(rr_draws) >= 10) {
+          rr_q <- quantile(rr_draws, c(0.025, 0.5, 0.975))
+          data.frame(group = grp, outcome = od$label, outcome_var = outcome_col,
+                     racism_level = lev, rr = rr_q[2], rr_lo = rr_q[1],
+                     rr_hi = rr_q[3], n = nrow(sub2), stringsAsFactors = FALSE)
+        } else {
+          data.frame(group = grp, outcome = od$label, outcome_var = outcome_col,
+                     racism_level = lev, rr = NA, rr_lo = NA, rr_hi = NA,
+                     n = nrow(sub2), stringsAsFactors = FALSE)
+        }
+      }, error = function(e) {
+        cat(sprintf("    SIM ERROR %s / %s / %s (collapsed): %s\n", grp, od$label, lev, e$message))
+        data.frame(group = grp, outcome = od$label, outcome_var = outcome_col,
+                   racism_level = lev, rr = NA, rr_lo = NA, rr_hi = NA,
+                   n = nrow(sub2), stringsAsFactors = FALSE)
+      })
+      collapsed_rows[[length(collapsed_rows) + 1]] <- sim_res
+    }
+    cat(sprintf("  %s / %s done (collapsed)\n", grp, od$label))
+  }
+}
+collapsed_df <- do.call(rbind, collapsed_rows)
+rownames(collapsed_df) <- NULL
+
 # ── 5. Save results ──────────────────────────────────────────
 write.csv(prev_df, file.path(DATA_DIR, "prevalences.csv"), row.names = FALSE)
 write.csv(pr_df, file.path(DATA_DIR, "risk_ratios.csv"), row.names = FALSE)
 write.csv(race_df, file.path(DATA_DIR, "race_stratified_rr.csv"), row.names = FALSE)
 write.csv(full_strat_df, file.path(DATA_DIR, "stratified_rr.csv"), row.names = FALSE)
+write.csv(collapsed_df, file.path(DATA_DIR, "collapsed_rr.csv"), row.names = FALSE)
 
 # Also save racism prevalence by race for text
 any_rows <- list()
@@ -284,5 +381,6 @@ cat(sprintf("  prevalences.csv:       %d rows\n", nrow(prev_df)))
 cat(sprintf("  risk_ratios.csv:       %d rows\n", nrow(pr_df)))
 cat(sprintf("  race_stratified_rr.csv: %d rows\n", nrow(race_df)))
 cat(sprintf("  stratified_rr.csv:     %d rows\n", nrow(full_strat_df)))
+cat(sprintf("  collapsed_rr.csv:     %d rows\n", nrow(collapsed_df)))
 cat(sprintf("  racism_prevalence.csv: %d rows\n", nrow(racism_prev_df)))
 cat("Done.\n")
