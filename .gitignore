@@ -1,0 +1,24 @@
+# Data (downloaded at runtime)
+data/
+
+# Generated outputs
+output/
+*.pdf
+*.tex
+*.aux
+*.log
+*.out
+*.synctex.gz
+
+# Keep results PDFs in figures/
+!figures/*.pdf
+
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Changelog
+.CHANGELOG/
