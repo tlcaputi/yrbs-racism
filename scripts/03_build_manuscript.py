@@ -312,11 +312,17 @@ for idx, (label, domain, _, _) in enumerate(OUTCOMES):
     ax.set_xticklabels(['Never', 'Rarely', 'Sometimes', 'Most of\nthe time', 'Always'],
                        fontsize=9, rotation=45, ha='right')
     ax.set_yscale('log')
-    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter('%.1f'))
+    ax.set_yticks([1, 1.5, 2, 3, 5, 8])
+    ax.get_yaxis().set_major_formatter(mticker.ScalarFormatter())
     ax.yaxis.set_minor_formatter(mticker.NullFormatter())
     ax.tick_params(axis='y', labelsize=10)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
+    ax.set_facecolor('white')
+    for spine in ax.spines.values():
+        spine.set_visible(True)
+        spine.set_linewidth(0.6)
+        spine.set_color('#333333')
+    ax.grid(True, which='major', axis='both', color='#cccccc', linewidth=0.5, linestyle='-')
+    ax.set_axisbelow(True)
 
     # Title wrapping
     short = label
