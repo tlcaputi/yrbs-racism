@@ -151,57 +151,110 @@ for (od in outcome_defs) {
 pr_df <- do.call(rbind, pr_rows)
 rownames(pr_df) <- NULL
 
-# ── 4. Race-stratified analysis (bullied at school) ──────────
+# ── 4. Race/ethnicity–stratified analysis (all outcomes, all groups) ──
 cat("Running race-stratified analyses...\n")
 
 race_covs_str <- "female + age_cat + english_prof + good_grades"
-race_rows <- list()
+full_strat_rows <- list()
 
-for (race in c("White", "Black", "Hispanic", "Asian", "Multiple")) {
-  sub_race <- df[!is.na(df$race_cat) & df$race_cat == race, ]
-  fml <- as.formula(paste("QN24_bin ~ racism_f +", race_covs_str))
-  sub2 <- sub_race[complete.cases(sub_race[, c("QN24_bin", "racism_f", "weight",
-                                                "female", "age_cat",
-                                                "english_prof", "good_grades")]), ]
-  sub2 <- sub2[sub2$weight > 0, ]
-
-  if (nrow(sub2) < 50 || sum(sub2$QN24_bin, na.rm = TRUE) < 5) {
-    cat(sprintf("  SKIP %s (n=%d)\n", race, nrow(sub2)))
-    next
+for (grp in c("Non-White", "White", "Black", "Hispanic", "Asian",
+              "AI/AN", "NH/PI", "Multiple")) {
+  if (grp == "Non-White") {
+    sub_grp <- df[!is.na(df$race_cat) & df$race_cat != "White", ]
+    covs <- paste0(race_covs_str, " + race_f")
+  } else {
+    sub_grp <- df[!is.na(df$race_cat) & df$race_cat == grp, ]
+    covs <- race_covs_str
   }
 
-  z <- tryCatch(
-    zelig2(fml, model = "logit", data = sub2, weights = sub2$weight, num = NUM_SIMS),
-    error = function(e) { cat(sprintf("  ERROR %s: %s\n", race, e$message)); NULL }
-  )
-  if (is.null(z)) next
+  for (od in outcome_defs) {
+    outcome_col <- paste0(od$qn, "_bin")
+    fml <- as.formula(paste(outcome_col, "~ racism_f +", covs))
 
-  for (lev in c("Sometimes", "Always")) {
-    z2 <- setx(z, racism_f = "Never", fn = "mean")
-    z2 <- setx1(z2, racism_f = lev, fn = "mean")
-    z2 <- sim(z2)
-    qi <- zelig2_qi_to_df(z2)
-    rr_draws <- qi$rr[is.finite(qi$rr)]
+    base_vars <- c(outcome_col, "racism_f", "weight", "female", "age_cat",
+                   "english_prof", "good_grades")
+    if (grp == "Non-White") base_vars <- c(base_vars, "race_f")
 
-    if (length(rr_draws) >= 10) {
-      rr_q <- quantile(rr_draws, c(0.025, 0.5, 0.975))
-      race_rows[[length(race_rows) + 1]] <- data.frame(
-        race = race, outcome = "Bullied at school",
-        racism_level = lev,
-        rr = rr_q[2], rr_lo = rr_q[1], rr_hi = rr_q[3],
-        n = nrow(sub2), stringsAsFactors = FALSE
-      )
+    sub2 <- sub_grp[complete.cases(sub_grp[, base_vars]), ]
+    sub2 <- sub2[sub2$weight > 0, ]
+    if (grp == "Non-White") sub2$race_f <- droplevels(sub2$race_f)
+
+    if (nrow(sub2) < 50 || sum(sub2[[outcome_col]], na.rm = TRUE) < 5) {
+      cat(sprintf("  SKIP %s / %s (n=%d)\n", grp, od$label, nrow(sub2)))
+      for (lev in c("Rarely", "Sometimes", "Most", "Always")) {
+        full_strat_rows[[length(full_strat_rows) + 1]] <- data.frame(
+          group = grp, outcome = od$label, outcome_var = outcome_col,
+          racism_level = lev, rr = NA, rr_lo = NA, rr_hi = NA, n = nrow(sub2),
+          stringsAsFactors = FALSE
+        )
+      }
+      next
     }
+
+    z <- tryCatch(
+      zelig2(fml, model = "logit", data = sub2, weights = sub2$weight, num = NUM_SIMS),
+      error = function(e) {
+        cat(sprintf("  ERROR %s / %s: %s\n", grp, od$label, e$message)); NULL
+      }
+    )
+    if (is.null(z)) {
+      for (lev in c("Rarely", "Sometimes", "Most", "Always")) {
+        full_strat_rows[[length(full_strat_rows) + 1]] <- data.frame(
+          group = grp, outcome = od$label, outcome_var = outcome_col,
+          racism_level = lev, rr = NA, rr_lo = NA, rr_hi = NA, n = nrow(sub2),
+          stringsAsFactors = FALSE
+        )
+      }
+      next
+    }
+
+    for (lev in c("Rarely", "Sometimes", "Most", "Always")) {
+      sim_res <- tryCatch({
+        z2 <- setx(z, racism_f = "Never", fn = "mean")
+        z2 <- setx1(z2, racism_f = lev, fn = "mean")
+        z2 <- sim(z2)
+        qi <- zelig2_qi_to_df(z2)
+        rr_draws <- qi$rr[is.finite(qi$rr)]
+        if (length(rr_draws) >= 10) {
+          rr_q <- quantile(rr_draws, c(0.025, 0.5, 0.975))
+          data.frame(group = grp, outcome = od$label, outcome_var = outcome_col,
+                     racism_level = lev, rr = rr_q[2], rr_lo = rr_q[1],
+                     rr_hi = rr_q[3], n = nrow(sub2), stringsAsFactors = FALSE)
+        } else {
+          data.frame(group = grp, outcome = od$label, outcome_var = outcome_col,
+                     racism_level = lev, rr = NA, rr_lo = NA, rr_hi = NA,
+                     n = nrow(sub2), stringsAsFactors = FALSE)
+        }
+      }, error = function(e) {
+        cat(sprintf("    SIM ERROR %s / %s / %s: %s\n", grp, od$label, lev, e$message))
+        data.frame(group = grp, outcome = od$label, outcome_var = outcome_col,
+                   racism_level = lev, rr = NA, rr_lo = NA, rr_hi = NA,
+                   n = nrow(sub2), stringsAsFactors = FALSE)
+      })
+      full_strat_rows[[length(full_strat_rows) + 1]] <- sim_res
+    }
+    cat(sprintf("  %s / %s done (n=%d)\n", grp, od$label, nrow(sub2)))
   }
-  cat(sprintf("  %s done (n=%d)\n", race, nrow(sub2)))
 }
-race_df <- do.call(rbind, race_rows)
+full_strat_df <- do.call(rbind, full_strat_rows)
+rownames(full_strat_df) <- NULL
+
+# Backward-compatible extract for inline text
+race_df <- full_strat_df[full_strat_df$outcome == "Bullied at school" &
+                         full_strat_df$racism_level %in% c("Sometimes", "Always") &
+                         full_strat_df$group %in% c("White", "Black", "Hispanic",
+                                                    "Asian", "Multiple"), ]
+race_df <- data.frame(race = race_df$group, outcome = race_df$outcome,
+                      racism_level = race_df$racism_level,
+                      rr = race_df$rr, rr_lo = race_df$rr_lo, rr_hi = race_df$rr_hi,
+                      n = race_df$n, stringsAsFactors = FALSE)
 rownames(race_df) <- NULL
 
 # ── 5. Save results ──────────────────────────────────────────
 write.csv(prev_df, file.path(DATA_DIR, "prevalences.csv"), row.names = FALSE)
 write.csv(pr_df, file.path(DATA_DIR, "risk_ratios.csv"), row.names = FALSE)
 write.csv(race_df, file.path(DATA_DIR, "race_stratified_rr.csv"), row.names = FALSE)
+write.csv(full_strat_df, file.path(DATA_DIR, "stratified_rr.csv"), row.names = FALSE)
 
 # Also save racism prevalence by race for text
 any_rows <- list()
@@ -230,5 +283,6 @@ cat(sprintf("\nResults saved to %s/\n", DATA_DIR))
 cat(sprintf("  prevalences.csv:       %d rows\n", nrow(prev_df)))
 cat(sprintf("  risk_ratios.csv:       %d rows\n", nrow(pr_df)))
 cat(sprintf("  race_stratified_rr.csv: %d rows\n", nrow(race_df)))
+cat(sprintf("  stratified_rr.csv:     %d rows\n", nrow(full_strat_df)))
 cat(sprintf("  racism_prevalence.csv: %d rows\n", nrow(racism_prev_df)))
 cat("Done.\n")

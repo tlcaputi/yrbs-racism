@@ -27,6 +27,7 @@ print("Loading R output...")
 prev_df   = pd.read_csv(os.path.join(DATA, "prevalences.csv"))
 rr_df     = pd.read_csv(os.path.join(DATA, "risk_ratios.csv"))
 race_rr   = pd.read_csv(os.path.join(DATA, "race_stratified_rr.csv"))
+strat_rr  = pd.read_csv(os.path.join(DATA, "stratified_rr.csv"))
 racism_p  = pd.read_csv(os.path.join(DATA, "racism_prevalence.csv"))
 
 # Outcome order and metadata
@@ -124,6 +125,12 @@ for qn in OUTCOME_QN.values():
 # Non-White subset
 nw = raw[(raw['raceeth'].notna()) & (raw['raceeth'] != 5)].copy()
 nw_n = len(nw)
+
+# Group sizes for eTable panels
+group_ns = {'All': len(raw), 'Non-White': nw_n}
+for _rn, _rv in [('White', [5]), ('Black', [3]), ('Hispanic', [6]), ('Asian', [2]),
+                  ('AI/AN', [1]), ('NH/PI', [4]), ('Multiple', [7, 8])]:
+    group_ns[_rn] = len(raw[raw['raceeth'].isin(_rv)])
 
 # Non-White most/always rate
 nw_total_w = nw['weight'].astype(float).sum()
@@ -276,69 +283,71 @@ Outcome & $N$ & Never & Rarely & Sometimes & Most of the time & Always \\
 \end{{landscape}}"""
 
 
-# ── Generate figure (faceted ARR dose-response with CI ribbon bands) ──
-print("Generating figure...")
-
+# ── Figure helper ──────────────────────────────────────────────
 DOMAIN_COLORS_FIG = {
     'Mental Health': '#2166ac',
     'Violence': '#b2182b',
     'Substance Use': '#e66101',
 }
 
-fig, axes = plt.subplots(2, 5, figsize=(16, 7))
-axes = axes.flatten()
+def make_dose_response_figure(rr_data, save_path):
+    """Generate faceted dose-response figure from risk ratio data."""
+    fig, axes = plt.subplots(2, 5, figsize=(16, 7))
+    axes = axes.flatten()
 
-for idx, (label, domain, _, _) in enumerate(OUTCOMES):
-    ax = axes[idx]
-    x = list(range(5))
-    y, lo, hi = [], [], []
+    for idx, (label, domain, _, _) in enumerate(OUTCOMES):
+        ax = axes[idx]
+        x = list(range(5))
+        y, lo, hi = [], [], []
 
-    # Never = reference (RR=1)
-    y.append(1.0); lo.append(1.0); hi.append(1.0)
+        y.append(1.0); lo.append(1.0); hi.append(1.0)
 
-    for lev in ["Rarely", "Sometimes", "Most", "Always"]:
-        row = rr_df[(rr_df['outcome'] == label) & (rr_df['racism_level'] == lev)]
-        if len(row) and not pd.isna(row.iloc[0]['rr']):
-            r = row.iloc[0]
-            y.append(r['rr']); lo.append(r['rr_lo']); hi.append(r['rr_hi'])
-        else:
-            y.append(np.nan); lo.append(np.nan); hi.append(np.nan)
+        for lev in ["Rarely", "Sometimes", "Most", "Always"]:
+            row = rr_data[(rr_data['outcome'] == label) & (rr_data['racism_level'] == lev)]
+            if len(row) and not pd.isna(row.iloc[0]['rr']):
+                r = row.iloc[0]
+                y.append(r['rr']); lo.append(r['rr_lo']); hi.append(r['rr_hi'])
+            else:
+                y.append(np.nan); lo.append(np.nan); hi.append(np.nan)
 
-    color = DOMAIN_COLORS_FIG.get(domain, '#333')
-    ax.fill_between(x, lo, hi, alpha=0.25, color=color, linewidth=0)
-    ax.plot(x, y, '-o', color=color, markersize=5, linewidth=2.0)
-    ax.axhline(1.0, color='#888888', linewidth=0.7, linestyle='--')
-    ax.set_xticks(x)
-    ax.set_xticklabels(['Never', 'Rarely', 'Sometimes', 'Most of\nthe time', 'Always'],
-                       fontsize=9, rotation=45, ha='right')
-    ax.set_yscale('log')
-    ax.set_yticks([1, 1.5, 2, 3, 5, 8])
-    ax.get_yaxis().set_major_formatter(mticker.ScalarFormatter())
-    ax.yaxis.set_minor_formatter(mticker.NullFormatter())
-    ax.tick_params(axis='y', labelsize=10)
-    ax.set_facecolor('white')
-    for spine in ax.spines.values():
-        spine.set_visible(True)
-        spine.set_linewidth(0.6)
-        spine.set_color('#333333')
-    ax.grid(True, which='major', axis='both', color='#cccccc', linewidth=0.5, linestyle='-')
-    ax.set_axisbelow(True)
+        color = DOMAIN_COLORS_FIG.get(domain, '#333')
+        ax.fill_between(x, lo, hi, alpha=0.25, color=color, linewidth=0)
+        ax.plot(x, y, '-o', color=color, markersize=5, linewidth=2.0)
+        ax.axhline(1.0, color='#888888', linewidth=0.7, linestyle='--')
+        ax.set_xticks(x)
+        ax.set_xticklabels(['Never', 'Rarely', 'Sometimes', 'Most of\nthe time', 'Always'],
+                           fontsize=9, rotation=45, ha='right')
+        ax.tick_params(axis='y', labelsize=10)
+        ax.set_facecolor('white')
+        for spine in ax.spines.values():
+            spine.set_visible(True)
+            spine.set_linewidth(0.6)
+            spine.set_color('#333333')
+        ax.grid(True, which='major', axis='both', color='#cccccc', linewidth=0.5, linestyle='-')
+        ax.set_axisbelow(True)
 
-    # Title wrapping
-    short = label
-    if len(short) > 22:
-        words = short.split(); mid = len(words) // 2
-        short = ' '.join(words[:mid]) + '\n' + ' '.join(words[mid:])
-    ax.set_title(short, fontsize=12, fontweight='bold', pad=8)
-    if idx % 5 == 0:
-        ax.set_ylabel('Adjusted\nRisk Ratio', fontsize=11)
-    if idx >= 5:
-        ax.set_xlabel('', fontsize=11)
+        short = label
+        if len(short) > 22:
+            words = short.split(); mid = len(words) // 2
+            short = ' '.join(words[:mid]) + '\n' + ' '.join(words[mid:])
+        ax.set_title(short, fontsize=12, fontweight='bold', pad=8)
+        if idx % 5 == 0:
+            ax.set_ylabel('Adjusted\nRisk Ratio', fontsize=11)
 
-plt.tight_layout()
-fig.savefig(os.path.join(FIGS, 'figure1.pdf'), dpi=300, bbox_inches='tight')
-plt.close()
-print(f"  Saved figure")
+    fig.supxlabel('Frequency of School-Based Racial Discrimination', fontsize=12)
+    plt.tight_layout()
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+
+# ── Generate figures ──────────────────────────────────────────
+print("Generating figures...")
+make_dose_response_figure(rr_df, os.path.join(FIGS, 'figure1.pdf'))
+print("  Saved figure1")
+
+nw_rr = strat_rr[strat_rr['group'] == 'Non-White']
+make_dose_response_figure(nw_rr, os.path.join(FIGS, 'efigure1.pdf'))
+print("  Saved efigure1")
 
 
 # ── Build supplement eTable (as plain string to avoid rf-string escaping) ──
@@ -473,6 +482,88 @@ Coded as binary (1 if Very well or Well). \\
 \doublespacing
 \normalsize
 """
+
+# ── Generate eTable 2 (race-stratified ARRs) ─────────────────
+print("Generating eTable 2...")
+
+ETABLE_GROUPS = [
+    ('All', 'All Students', rr_df),
+    ('Non-White', 'Non-White Students', strat_rr[strat_rr['group'] == 'Non-White']),
+    ('White', 'White Students', strat_rr[strat_rr['group'] == 'White']),
+    ('Black', 'Black Students', strat_rr[strat_rr['group'] == 'Black']),
+    ('Hispanic', 'Hispanic Students', strat_rr[strat_rr['group'] == 'Hispanic']),
+    ('Asian', 'Asian Students', strat_rr[strat_rr['group'] == 'Asian']),
+    ('AI/AN', 'American Indian/Alaska Native Students', strat_rr[strat_rr['group'] == 'AI/AN']),
+    ('NH/PI', 'Native Hawaiian/Pacific Islander Students', strat_rr[strat_rr['group'] == 'NH/PI']),
+    ('Multiple', 'Multiracial Students', strat_rr[strat_rr['group'] == 'Multiple']),
+]
+
+def make_rr_panel_rows(rr_data):
+    """Build tabular body rows for one eTable panel (ARRs)."""
+    rows = []
+    current_domain = None
+    for label, domain, _, _ in OUTCOMES:
+        if domain != current_domain:
+            if current_domain is not None:
+                rows.append(r'\addlinespace[4pt]')
+            rows.append(f'\\textit{{{domain}}} \\\\')
+            current_domain = domain
+
+        sub = rr_data[rr_data['outcome'] == label]
+        n_val = int(sub['n'].iloc[0]) if len(sub) else 0
+
+        cells = ['1 [Ref]']
+        for lev in ["Rarely", "Sometimes", "Most", "Always"]:
+            row = sub[sub['racism_level'] == lev]
+            if len(row) and not pd.isna(row.iloc[0]['rr']):
+                r = row.iloc[0]
+                cells.append(f'{r["rr"]:.2f} ({r["rr_lo"]:.2f}--{r["rr_hi"]:.2f})')
+            else:
+                cells.append('---')
+
+        rows.append(f'\\quad {label} & {n_val:,} & '
+                     + ' & '.join(cells) + r' \\')
+    return '\n'.join(rows)
+
+etable2_panels = []
+for grp_key, grp_label, grp_data in ETABLE_GROUPS:
+    grp_n = group_ns.get(grp_key, 0)
+    panel_rows = make_rr_panel_rows(grp_data)
+    etable2_panels.append(
+        f'\\midrule\n'
+        f'\\multicolumn{{7}}{{l}}{{\\textbf{{{grp_label} ($N = {grp_n:,}$)}}}} \\\\\n'
+        f'\\midrule\n'
+        f'{panel_rows}'
+    )
+
+etable2_body = '\n'.join(etable2_panels)
+
+etable2_tex = (
+    r'\begin{landscape}' '\n'
+    r'\footnotesize' '\n'
+    r'\begin{longtable}{l r ccccc}' '\n'
+    r'\caption*{\textbf{eTable 2.} Adjusted Risk Ratios for Health Outcomes by Frequency of School-Based Racial '
+    r'Discrimination, Stratified by Race/Ethnicity, 2023 YRBS}' '\n'
+    r'\label{tab:etable2} \\' '\n'
+    r'\toprule' '\n'
+    r' & & \multicolumn{5}{c}{Adjusted Risk Ratio (95\% CI)} \\' '\n'
+    r'\cmidrule(lr){3-7}' '\n'
+    r'Outcome & $N$ & Never & Rarely & Sometimes & Most of the time & Always \\' '\n'
+    r'\midrule' '\n'
+    r'\endfirsthead' '\n'
+    r'\toprule' '\n'
+    r' & & \multicolumn{5}{c}{Adjusted Risk Ratio (95\% CI)} \\' '\n'
+    r'\cmidrule(lr){3-7}' '\n'
+    r'Outcome & $N$ & Never & Rarely & Sometimes & Most of the time & Always \\' '\n'
+    r'\midrule' '\n'
+    r'\endhead' '\n'
+    r'\bottomrule' '\n'
+    r'\endfoot' '\n'
+    f'{etable2_body}\n'
+    r'\end{longtable}' '\n'
+    r'\normalsize' '\n'
+    r'\end{landscape}'
+)
 
 # ── Compute word count (body only: Introduction through Discussion) ──
 _body_parts = [
@@ -758,6 +849,26 @@ interventions can reduce children's experience with racism.
 \vspace{{12pt}}
 
 {supplement_tex}
+
+\clearpage
+
+{etable2_tex}
+
+\clearpage
+
+\begin{{landscape}}
+\begin{{figure}}[H]
+  \centering
+  \includegraphics[width=\linewidth]{{figures/efigure1.pdf}}
+  \caption*{{\textbf{{eFigure 1.}} Adjusted risk ratios for health outcomes by frequency of school-based
+  racism among non-White US high school students, 2023 YRBS ($N = {nw_n:,}$).
+  Risk ratios from logistic regression computed via simulation from the
+  variance-covariance matrix (King et al, 2000), adjusting for sex, age,
+  race/ethnicity, English language proficiency, and grades.
+  Shaded bands indicate 95\% confidence intervals. Reference category is Never.}}
+  \label{{fig:efig1}}
+\end{{figure}}
+\end{{landscape}}
 
 \end{{document}}
 """
