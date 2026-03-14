@@ -1,0 +1,39 @@
+# Data (downloaded at runtime)
+data/
+
+# Generated outputs
+output/
+*.pdf
+*.tex
+*.aux
+*.log
+*.out
+*.synctex.gz
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+
+# Keep results PDFs in figures/
+!figures/*.pdf
+
+# Keep draft manuscript
+!draft-v2.tex
+!draft-v2.pdf
+
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Changelog / validation (private)
+.CHANGELOG/
+.DEEP-VALIDATION/
+
+# Azagba replication (private investigation files)
+azagba_replication.py
+_azagba_analysis.R
+_yrbs2023_recoded.csv
+replication_*/
